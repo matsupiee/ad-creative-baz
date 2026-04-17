@@ -5,6 +5,7 @@ import { chromium, type Response } from "playwright";
 
 import { env } from "../env.ts";
 import { log } from "../lib/logger.ts";
+import { dumpXhr } from "./dump-xhr.ts";
 import { extractFromDom } from "./extract-from-dom.ts";
 import { collectXhrCandidates, type TopAdItem } from "./extract-from-xhr.ts";
 
@@ -12,7 +13,9 @@ const ARTIFACTS_DIR = resolve(import.meta.dirname, "..", "..", "artifacts");
 
 function buildTargetUrl(): string {
   const locale = env.TIKTOK_LOCALE;
-  return `https://ads.tiktok.com/business/creativecenter/topads/pad/${locale}?region=JP&period=7`;
+  // 実際の Creative Center Top Ads Dashboard。
+  // https://ads.tiktok.com/business/creativecenter/inspiration/topads/pc/en?region=JP&period=7
+  return `https://ads.tiktok.com/business/creativecenter/inspiration/topads/pc/${locale}?region=JP&period=7`;
 }
 
 function emitOk(source: "xhr" | "dom", items: TopAdItem[]): void {
@@ -82,6 +85,10 @@ async function main(): Promise<number> {
       msg: "xhr route yielded no items, falling back to dom",
       captured: xhrResponses.length,
     });
+
+    // XHR 空振り時の診断 dump
+    const dumpDir = resolve(ARTIFACTS_DIR, `xhr-${Date.now()}`);
+    await dumpXhr(xhrResponses, dumpDir);
 
     // Route B: DOM パース
     const domItems = await extractFromDom(page);
