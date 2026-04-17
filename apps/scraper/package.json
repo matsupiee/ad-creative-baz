@@ -1,0 +1,20 @@
+{
+  "name": "scraper",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "poc:topads": "bun run src/poc/topads.ts",
+    "check-types": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@t3-oss/env-core": "^0.13.1",
+    "dotenv": "catalog:",
+    "playwright": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@ad-creative-baz/config": "workspace:*",
+    "@types/node": "catalog:",
+    "typescript": "^5"
+  }
+}

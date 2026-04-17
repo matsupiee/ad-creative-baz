@@ -28,6 +28,11 @@
     },
     "destroy": {
       "cache": false
+    },
+    "poc:topads": {
+      "cache": false,
+      "persistent": false,
+      "dependsOn": []
     }
   }
 }
