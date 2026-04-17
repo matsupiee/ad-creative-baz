@@ -1,0 +1,3 @@
+{
+  "extends": "@ad-creative-baz/config/tsconfig.base.json"
+}

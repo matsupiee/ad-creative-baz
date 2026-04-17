@@ -1,0 +1,24 @@
+{
+  "name": "@ad-creative-baz/auth",
+  "type": "module",
+  "exports": {
+    ".": {
+      "default": "./src/index.ts"
+    },
+    "./*": {
+      "default": "./src/*.ts"
+    }
+  },
+  "scripts": {},
+  "dependencies": {
+    "@ad-creative-baz/db": "workspace:*",
+    "@ad-creative-baz/env": "workspace:*",
+    "better-auth": "catalog:",
+    "dotenv": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@ad-creative-baz/config": "workspace:*",
+    "typescript": "^5"
+  }
+}

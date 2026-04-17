@@ -1,0 +1,29 @@
+{
+  "name": "@ad-creative-baz/db",
+  "type": "module",
+  "exports": {
+    ".": {
+      "default": "./src/index.ts"
+    },
+    "./*": {
+      "default": "./src/*.ts"
+    }
+  },
+  "scripts": {
+    "db:push": "drizzle-kit push",
+    "db:generate": "drizzle-kit generate"
+  },
+  "dependencies": {
+    "@ad-creative-baz/env": "workspace:*",
+    "@libsql/client": "catalog:",
+    "dotenv": "catalog:",
+    "drizzle-orm": "^0.45.1",
+    "libsql": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@ad-creative-baz/config": "workspace:*",
+    "drizzle-kit": "^0.31.8",
+    "typescript": "^5"
+  }
+}
