@@ -20,7 +20,7 @@
 |---|---|---|---|
 | 3 | Whisper API 呼び出しのラッパ実装 | 1分の動画を投げてテキストが返る | OPENAI_API_KEY |
 | 6 | Stripe Subscription の最低限組み込み | テストモードで月1万円プランを購読できる | Stripe アカウント |
-| 7 | scraper の結果を `ads` / `ad_snapshots` に UPSERT するバッチ実装 | Cron 1 回で DB にレコードが積まれる | なし |
+| 8 | `ads` テーブルの bucket (region/period/orderBy/rank) を別テーブル切り出し | 同一 material が複数バケットに同時に載っても listAds が正しく返す | なし |
 
 ---
 
@@ -33,6 +33,7 @@
 - [x] **Task #2**: `packages/db/src/schema/ads.ts` で `ads` / `ad_snapshots` / `ad_transcripts` を定義。relations + as-const unions (source/region/order_by/status) をカラム型に反映。migration 生成と `db:push` は人間タスク（AGENTS.md）。
 - [x] **Task #4**: `/` でランキング一覧を DB から表示。`packages/db/src/queries/ads.ts` + `packages/api/src/routers/ads.ts` (`ads.list`) + `apps/web/src/routes/index.tsx`。ローカル D1 (Miniflare) に drizzle 初回 migration 自動適用 + `seed-sample.sql` で 12 件投入、`curl /api/rpc/ads/list` で JSON 応答を確認。
 - [x] **Task #5**: `/login` をタブ付きカード UI にカスタム（Sign In デフォルト、ブランドヘッダ）、`beforeLoad` でログイン済ユーザを redirect 先へ戻す、`/dashboard` は Welcome / email / View Ranking ボタン付き Card へ。sign-in/sign-up form は `redirectTo` prop を受け取る presentational 形に分離。`?redirect=` は allowlist (`["/dashboard","/"]`) + `.catch()` で open-redirect 防止。curl でサインアップ → ログイン → `/dashboard` 表示まで確認。
+- [x] **Task #7**: scraper → `ads` / `ad_snapshots` UPSERT。`ads.ingest` oRPC endpoint (token gated) + `apps/scraper/src/ingest/run.ts` バッチ。`db.batch([upsertAds, insertSnapshots])` で一括。snapshot PK は `(source, material, region, period, orderBy, capturedAt)` を合成。
 
 ---
 
@@ -46,6 +47,8 @@
 - **2026-04-18**: `/list` レスポンスには `like` はあるが `play_count` は無い。再生数取得は詳細エンドポイント調査 or 別経路が必要（Task #2 以降の課題）。
 - **2026-04-18**: `ads.id` に ULID を振らず TikTok の `material.id` をそのまま PK に採用。UPSERT とクロスシステムでの突合が容易。v2 以降で他プラットフォームを足すときは `(source, source_material_id)` の unique index で衝突を防ぐ。
 - **2026-04-18**: MVP UI は履歴を見せないが、`ad_snapshots` を先に用意。履歴は後からバックフィル不能なので、Cron 稼働前に器だけ作る。`ad_fetch_runs` は stdout + Sentry で代用し、今は作らない。
+- **2026-04-18**: scraper から D1 に書く経路は、scraper プロセスが CF Workers ランタイム外にあるため直書き不可（`packages/db` が `cloudflare:workers` binding 依存）。shared secret 付き oRPC endpoint (`ads.ingest`) を噛ませて、scraper は HTTP POST に徹する構成に。token は env.INGEST_TOKEN (worker binding) と `x-ingest-token` ヘッダで constant-time 比較。
+- **2026-04-18**: `ads` テーブルの `(region, period, orderBy, rank)` カラムは Task #2 設計の延長で、UPSERT のたびに最新バケットの値で上書きされる。つまり同一 material が複数バケット（例: US/30 と US/7）に同時に載っても `listAds` は片方しか返せない。履歴は `ad_snapshots` が全量保持するので MVP 期は許容。後続 Task #8 で `ad_rankings(ad_id, region, period, orderBy, rank)` に切り出す。
 
 ---
 
@@ -115,6 +118,15 @@
 - verify: `bun run check-types` green (FULL TURBO)、`bun run check` は pre-existing 2 件のみ、`curl -s http://localhost:3001/api/rpc/ads/list --data '{"json":{...}}'` で JSON 応答 OK、home HTML が SSR でヘッダ + skeleton を描画することを確認
 - 次: Task #7 (scraper 結果を ads/ad_snapshots に UPSERT) or Task #5 (ログイン画面)
 - メモ: oRPC RPC プロトコルは body `{"json":{...}}` envelope でシリアライズする。フロント生成 SQL は `drizzle-kit generate` で作成、D1 HTTP driver は credentials が無いため `db:push` 不要・`alchemy dev` 起動時に `migrationsDir` から自動適用される
+
+### 2026-04-18 — タスク#7 scraper → ads/ad_snapshots UPSERT
+
+- 変更: `packages/db/src/queries/ads.ts` (upsertAds 追加、db.batch で ads upsert + ad_snapshots insert を一括) / `packages/api/src/context.ts` (context.headers を露出) / `packages/api/src/routers/ads.ts` (`ingest` procedure、constant-time token 比較) / `packages/env/env.d.ts` 経由で `INGEST_TOKEN` binding (`packages/infra/alchemy.run.ts`) / `apps/scraper/src/env.ts` (INGEST_API_URL / INGEST_TOKEN) / `apps/scraper/src/ingest/run.ts` (新規、Playwright で (country, period) を回して ingest POST) / `apps/scraper/package.json` + `turbo.json` + root `package.json` (`ingest` script 配線) / `apps/scraper/README.md` 更新
+- 経路: scraper → `POST {INGEST_API_URL}/api/rpc/ads/ingest` with `x-ingest-token` → oRPC `ads.ingest` handler → `upsertAds` で `INSERT ... ON CONFLICT DO UPDATE` + `ad_snapshots` INSERT (`db.batch` で atomic)。snapshot PK は `source:material:region:period:orderBy:capturedAt` 合成キー
+- verify: `bun run check-types` green (packages/api, packages/db は scripts 上 check-types 無しだったため `bunx tsc --noEmit --project` で手動確認)、`bun run check` は pre-existing 2 件のみ。`bun run build` は `apps/web` が alchemy dev 未起動だと `wrangler.jsonc` が無く失敗するが、これは環境要件で本変更と無関係
+- Reviewer fix: (1) token 比較を constant-time に、(2) snapshot PK にバケットを含めて collision 回避、(3) `ads` テーブルの bucket 上書き問題は Task #2 由来の設計課題として Task #8 に切り出し
+- 次: 人間が alchemy dev 起動 + `INGEST_TOKEN` を `.env` に設定 → `bun run ingest` で smoke test。Task #3 (Whisper) / Task #5 (ログイン UI) / Task #8 (ad_rankings 切り出し) のいずれかへ
+- メモ: `packages/api` と `packages/db` に `check-types` script が無いので turbo からは型チェックされていない。これは既存のテスト穴。本セッションでは対象外にしたが、いずれ workflow.md に反映すべき
 
 ### 2026-04-18 — タスク#2 ads スキーマ追加
 

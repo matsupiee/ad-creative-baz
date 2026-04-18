@@ -40,6 +40,7 @@
     "deploy": "turbo -F @ad-creative-baz/infra deploy",
     "destroy": "turbo -F @ad-creative-baz/infra destroy",
     "poc:topads": "turbo -F scraper poc:topads",
+    "ingest": "turbo -F scraper ingest",
     "check": "oxlint && oxfmt --write"
   },
   "dependencies": {
