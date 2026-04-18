@@ -18,6 +18,7 @@ const listInputSchema = z.object({
   period: periodSchema.default(30),
   orderBy: z.enum(AD_ORDER_BYS).default("for_you"),
   limit: z.number().int().min(1).max(100).default(20),
+  freshOnly: z.boolean().default(false),
 });
 
 export type AdsListInput = z.infer<typeof listInputSchema>;

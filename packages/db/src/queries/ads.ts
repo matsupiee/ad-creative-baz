@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, gt, isNull, sql } from "drizzle-orm";
 
 import { createDb } from "../index";
 import type { AdOrderBy, AdPeriod, AdRegion } from "../schema/ads";
@@ -9,9 +9,10 @@ export interface ListAdsInput {
   period: AdPeriod;
   orderBy: AdOrderBy;
   limit: number;
+  freshOnly?: boolean;
 }
 
-export async function listAds({ region, period, orderBy, limit }: ListAdsInput) {
+export async function listAds({ region, period, orderBy, limit, freshOnly }: ListAdsInput) {
   const db = createDb();
 
   return db
@@ -21,6 +22,7 @@ export async function listAds({ region, period, orderBy, limit }: ListAdsInput) 
       brand: ads.brand,
       industry: ads.industry,
       videoUrl: ads.videoUrl,
+      videoUrlExpiresAt: ads.videoUrlExpiresAt,
       coverUrl: ads.coverUrl,
       durationSeconds: ads.durationSeconds,
       likes: ads.likes,
@@ -38,6 +40,7 @@ export async function listAds({ region, period, orderBy, limit }: ListAdsInput) 
         eq(ads.period, period),
         eq(ads.orderBy, orderBy),
         isNull(ads.deletedAt),
+        freshOnly ? gt(ads.videoUrlExpiresAt, new Date()) : undefined,
       ),
     )
     .orderBy(sql`${ads.rank} IS NULL`, asc(ads.rank))
