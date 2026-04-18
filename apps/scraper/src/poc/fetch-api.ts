@@ -1,4 +1,4 @@
-import type { BrowserContext } from "playwright";
+import type { Page } from "playwright";
 import { z } from "zod";
 
 const materialSchema = z
@@ -27,10 +27,11 @@ const listResponseSchema = z
     msg: z.string(),
     data: z
       .object({
-        materials: z.array(materialSchema),
+        materials: z.array(materialSchema).default([]),
         pagination: z.object({ total_count: z.number() }).passthrough().optional(),
       })
-      .passthrough(),
+      .passthrough()
+      .optional(),
   })
   .passthrough();
 
@@ -45,10 +46,19 @@ type FetchParams = {
 
 export type FetchResult = { ok: true; materials: TopAdMaterial[] } | { ok: false; reason: string };
 
-export async function fetchTopAds(
-  context: BrowserContext,
-  params: FetchParams,
-): Promise<FetchResult> {
+export function parseListResponse(body: unknown): FetchResult {
+  const parsed = listResponseSchema.safeParse(body);
+  if (!parsed.success) {
+    return { ok: false, reason: `schema: ${parsed.error.message.slice(0, 120)}` };
+  }
+  if (parsed.data.code !== 0) {
+    return { ok: false, reason: `api code ${parsed.data.code}: ${parsed.data.msg}` };
+  }
+  const materials = parsed.data.data?.materials ?? [];
+  return { ok: true, materials };
+}
+
+export async function fetchTopAds(page: Page, params: FetchParams): Promise<FetchResult> {
   const url = new URL("https://ads.tiktok.com/creative_radar_api/v1/top_ads/v2/list");
   url.searchParams.set("period", String(params.period));
   url.searchParams.set("page", "1");
@@ -57,24 +67,37 @@ export async function fetchTopAds(
   url.searchParams.set("country_code", params.countryCode);
 
   try {
-    const res = await context.request.get(url.toString(), {
-      headers: {
-        "Accept-Language": "en-US,en;q=0.9",
-        Referer: "https://ads.tiktok.com/business/creativecenter/inspiration/topads/pc/en",
+    // ブラウザコンテキスト内 fetch を使う。context.request.get は Playwright 内部の
+    // redirect/Set-Cookie パーサが Bun 環境と相性問題を起こすため回避。
+    const result: { ok: boolean; status: number; body: unknown } = await page.evaluate(
+      async (u: string) => {
+        const r = await fetch(u, {
+          credentials: "include",
+          headers: { "Accept-Language": "en-US,en;q=0.9" },
+        });
+        let body: unknown = null;
+        try {
+          body = await r.json();
+        } catch {
+          body = null;
+        }
+        return { ok: r.ok, status: r.status, body };
       },
-    });
-    if (!res.ok()) {
-      return { ok: false, reason: `http ${res.status()}` };
+      url.toString(),
+    );
+
+    if (!result.ok) {
+      return { ok: false, reason: `http ${result.status}` };
     }
-    const json: unknown = await res.json();
-    const parsed = listResponseSchema.safeParse(json);
+    const parsed = listResponseSchema.safeParse(result.body);
     if (!parsed.success) {
       return { ok: false, reason: `schema: ${parsed.error.message.slice(0, 120)}` };
     }
     if (parsed.data.code !== 0) {
       return { ok: false, reason: `api code ${parsed.data.code}: ${parsed.data.msg}` };
     }
-    return { ok: true, materials: parsed.data.data.materials };
+    const materials = parsed.data.data?.materials ?? [];
+    return { ok: true, materials };
   } catch (err) {
     return { ok: false, reason: String(err) };
   }
