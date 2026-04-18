@@ -128,35 +128,44 @@ export async function upsertAds(input: UpsertAdsInput): Promise<UpsertAdsResult>
   // 同じ material が別バケットで上位に来た場合、最新の INGEST だけが `ads` に反映される
   // （履歴は ad_snapshots で保持）。複数バケットを並行して listAds したいときは
   // 将来的に `ad_rankings(ad_id, region, period, orderBy, rank)` を切り出すこと。
-  const upsertAdsStmt = db
-    .insert(ads)
-    .values(adRows)
-    .onConflictDoUpdate({
-      target: ads.id,
-      set: {
-        title: sql`excluded.title`,
-        brand: sql`excluded.brand`,
-        industry: sql`excluded.industry`,
-        videoVid: sql`excluded.video_vid`,
-        videoUrl: sql`excluded.video_url`,
-        videoUrlExpiresAt: sql`excluded.video_url_expires_at`,
-        coverUrl: sql`excluded.cover_url`,
-        durationSeconds: sql`excluded.duration_seconds`,
-        likes: sql`excluded.likes`,
-        playCount: sql`excluded.play_count`,
-        shares: sql`excluded.shares`,
-        region: sql`excluded.region`,
-        period: sql`excluded.period`,
-        orderBy: sql`excluded.order_by`,
-        rank: sql`excluded.rank`,
-        lastSeenAt: sql`excluded.last_seen_at`,
-        deletedAt: sql`NULL`,
-      },
-    });
+  // D1 の bound-parameter 上限に当たらないよう 1 バッチあたりの行数をチャンクする。
+  // ads は 1 行 19 変数、snapshots は 10 変数（合計 29/行）。D1 のデフォルトは 100 binding/query
+  // 程度と低いので、3 行/バッチ（87 binding）で安全マージンを取る。
+  const CHUNK_SIZE = 3;
+  for (let i = 0; i < adRows.length; i += CHUNK_SIZE) {
+    const adChunk = adRows.slice(i, i + CHUNK_SIZE);
+    const snapshotChunk = snapshotRows.slice(i, i + CHUNK_SIZE);
 
-  const insertSnapshotsStmt = db.insert(adSnapshots).values(snapshotRows).onConflictDoNothing();
+    const upsertAdsStmt = db
+      .insert(ads)
+      .values(adChunk)
+      .onConflictDoUpdate({
+        target: ads.id,
+        set: {
+          title: sql`excluded.title`,
+          brand: sql`excluded.brand`,
+          industry: sql`excluded.industry`,
+          videoVid: sql`excluded.video_vid`,
+          videoUrl: sql`excluded.video_url`,
+          videoUrlExpiresAt: sql`excluded.video_url_expires_at`,
+          coverUrl: sql`excluded.cover_url`,
+          durationSeconds: sql`excluded.duration_seconds`,
+          likes: sql`excluded.likes`,
+          playCount: sql`excluded.play_count`,
+          shares: sql`excluded.shares`,
+          region: sql`excluded.region`,
+          period: sql`excluded.period`,
+          orderBy: sql`excluded.order_by`,
+          rank: sql`excluded.rank`,
+          lastSeenAt: sql`excluded.last_seen_at`,
+          deletedAt: sql`NULL`,
+        },
+      });
 
-  await db.batch([upsertAdsStmt, insertSnapshotsStmt]);
+    const insertSnapshotsStmt = db.insert(adSnapshots).values(snapshotChunk).onConflictDoNothing();
+
+    await db.batch([upsertAdsStmt, insertSnapshotsStmt]);
+  }
 
   return { upsertedAds: adRows.length, insertedSnapshots: snapshotRows.length };
 }

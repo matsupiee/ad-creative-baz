@@ -37,9 +37,9 @@ export const list = publicProcedure.input(listInputSchema).handler(async ({ inpu
 
 const ingestItemSchema = z.object({
   sourceMaterialId: z.string().min(1).max(128),
-  title: z.string().max(512).nullish(),
-  brand: z.string().max(256).nullish(),
-  industry: z.string().max(128).nullish(),
+  title: z.string().max(4096).nullish(),
+  brand: z.string().max(512).nullish(),
+  industry: z.string().max(256).nullish(),
   videoVid: z.string().max(128).nullish(),
   videoUrl: z.string().url().max(2048).nullish(),
   videoUrlExpiresAt: z.coerce.date().nullish(),

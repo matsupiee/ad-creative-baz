@@ -51,7 +51,16 @@ function HomeComponent() {
           {ads.data.map((ad) => (
             <li key={ad.id}>
               <Card>
-                {ad.coverUrl ? (
+                {ad.videoUrl ? (
+                  <video
+                    src={ad.videoUrl}
+                    poster={ad.coverUrl ?? undefined}
+                    controls
+                    playsInline
+                    preload="metadata"
+                    className="aspect-[9/16] w-full bg-black object-cover"
+                  />
+                ) : ad.coverUrl ? (
                   <img
                     src={ad.coverUrl}
                     alt={ad.title ?? "Ad cover"}

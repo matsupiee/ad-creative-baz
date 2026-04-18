@@ -139,6 +139,17 @@
 - 次: 人間が `bun run db:generate` → 生成 SQL を確認 → `bun run db:push` で dev D1 に適用。その後 Task #7 (scraper → DB UPSERT バッチ) へ
 - メモ: `ads.id` に ULID を振らず TikTok material id を直接採用した理由は意思決定ログ参照。`ad_snapshots` は UI 未使用だが履歴がバックフィル不能なので先に器を用意
 
+### 2026-04-18 — 初回実スクレイプ smoke test + 発見した 3 バグの修正
+
+- きっかけ: ローカルで `bun run dev` → `bun run ingest` を初めて通したところ、(1) 400 validation, (2) 500 D1 param 上限, (3) UI に動画が出ない の 3 件が顕在化
+- 変更:
+  - `packages/api/src/routers/ads.ts`: `ingestItemSchema.title.max(512)` が実 TikTok タイトル（絵文字混じり長文）を弾いたので 4096 へ。brand 256→512, industry 128→256 も現実に合わせて緩和
+  - `packages/db/src/queries/ads.ts`: `db.batch([upsertAds, insertSnapshots])` が D1 の bound-param 上限で `too many SQL variables at offset 1416: SQLITE_ERROR`。1 item あたり `ads(19) + ad_snapshots(10) = 29` 変数なので、3 items/batch にチャンク分割（87 変数 < 100）。ループで N 回 batch を回す
+  - `apps/web/src/routes/index.tsx`: `/list` レスポンスに `cover_url` が含まれない（実測 39/39 null）ため、プレビュー表示が「no preview」しか出なかった。`videoUrl` を `<video controls playsInline preload="metadata" poster={coverUrl}>` に差し替え。tiktokcdn は Referer なしで 206 Partial Content を返すのでクロスオリジン再生可
+- verify: `bun run ingest` で US/30=19 件・US/180=20 件取り込み成功（US/7 は TikTok 側で空）、`bun run check-types` green、`bun run build` green (1.93s)、`bun run check` は pre-existing 2 件のみ。Playwright で `/` を headless 描画 → `<video>` が readyState=4・videoW/H 解像度取得・CDN から 206 応答・console/page error 0 を確認
+- 次: (a) `/` は `freshOnly=false` デフォルトなので 6h 経過後に 403 動画が混ざる（Task #9 Cron 稼働後に default true 切替 or UI 側でフィルタ）、(b) scraper は Playwright goto でログインモーダル等に引っかかる可能性あり US/7 の「empty materials」は今のところ TikTok 実態なのか goto 失敗なのか切り分け必要
+- メモ: D1 bound-param 上限は Cloudflare 公式には 5000 とも書かれるが実測で 1416 変数付近で SQLITE_ERROR。余裕を持って 3 items/batch にした。`cover_url` 欠落は TikTok の `/list` v2 仕様のようで、詳細取得エンドポイント（Task #2 で触れた play_count 取得と同じ経路）で補完する余地あり
+
 ### 2026-04-18 — video URL 有効期限 (6h TTL) 判明 + スキーマ + ingest 対応
 
 - 調査: tiktokcdn URL の path 2nd segment (`<md5>/<exp_hex>/video/...`) が Unix epoch (hex)。20 URL 抽出で 6.001–6.072h に収束 → **固定 6h TTL**。`HEAD` で 206/video/mp4 取得確認、`exp_hex` を deadbeef に差し替えると 403（署名バインド）
