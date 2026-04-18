@@ -19,7 +19,6 @@
 | # | タスク | 完了条件 | ブロッカー |
 |---|---|---|---|
 | 3 | Whisper API 呼び出しのラッパ実装 | 1分の動画を投げてテキストが返る | OPENAI_API_KEY |
-| 5 | Better-Auth のログイン画面を MVP 用にカスタム | メール+パスワードでログイン→ダッシュボードへ遷移 | なし |
 | 6 | Stripe Subscription の最低限組み込み | テストモードで月1万円プランを購読できる | Stripe アカウント |
 | 7 | scraper の結果を `ads` / `ad_snapshots` に UPSERT するバッチ実装 | Cron 1 回で DB にレコードが積まれる | なし |
 
@@ -33,6 +32,7 @@
 - [x] **Task #1**: Playwright PoC。`apps/scraper` で `creative_radar_api/v1/top_ads/v2/list` から 20 件取得成功（US region, period=30）。videoUrl, title, brand, industry, likes が取得可能。動画URL は tiktokcdn.com の mp4 直リンク。
 - [x] **Task #2**: `packages/db/src/schema/ads.ts` で `ads` / `ad_snapshots` / `ad_transcripts` を定義。relations + as-const unions (source/region/order_by/status) をカラム型に反映。migration 生成と `db:push` は人間タスク（AGENTS.md）。
 - [x] **Task #4**: `/` でランキング一覧を DB から表示。`packages/db/src/queries/ads.ts` + `packages/api/src/routers/ads.ts` (`ads.list`) + `apps/web/src/routes/index.tsx`。ローカル D1 (Miniflare) に drizzle 初回 migration 自動適用 + `seed-sample.sql` で 12 件投入、`curl /api/rpc/ads/list` で JSON 応答を確認。
+- [x] **Task #5**: `/login` をタブ付きカード UI にカスタム（Sign In デフォルト、ブランドヘッダ）、`beforeLoad` でログイン済ユーザを redirect 先へ戻す、`/dashboard` は Welcome / email / View Ranking ボタン付き Card へ。sign-in/sign-up form は `redirectTo` prop を受け取る presentational 形に分離。`?redirect=` は allowlist (`["/dashboard","/"]`) + `.catch()` で open-redirect 防止。curl でサインアップ → ログイン → `/dashboard` 表示まで確認。
 
 ---
 
@@ -99,6 +99,14 @@
 - verify: `bun run check-types` green、`bun run check` は PRE-EXISTING 3 件のみ（新規分クリーン）
 - 未解決: (a) `play_count` / view 数はこの `/list` エンドポイントに含まれない → 詳細エンドポイント要調査。(b) JP 0 件問題。(c) `/list` は 1 ページ 20 件、ページネーション未検証
 - 次タスク: #2 `packages/db/src/schema/ads.ts` 設計
+
+### 2026-04-18 — タスク#5 ログイン画面 MVP カスタム
+
+- 変更: `apps/web/src/routes/login.tsx` (タブ付きカード + `validateSearch` zod + `beforeLoad` auto-redirect), `apps/web/src/routes/dashboard.tsx` (Welcome カード + View Ranking 導線), `apps/web/src/components/sign-in-form.tsx` / `sign-up-form.tsx` (wrapper/フッタリンク削除、`redirectTo` prop へ差し替え)
+- セキュリティ: `?redirect=` を `REDIRECT_ALLOWLIST = ["/dashboard","/"]` の `z.enum` + `.catch()` で allowlist 化（`//evil.com` 等の open-redirect 攻撃は静かにデフォルトへフォールバック）、`navigate({ href })` を `navigate({ to })` へ変更して TanStack Router の typed path にバインド
+- verify: `bun run dev` で `curl -X POST /api/auth/sign-up/email` → `curl /api/auth/sign-in/email` → `curl -b cookies /dashboard` で HTTP 200 + "Welcome Alice / alice@example.com / View Ranking" を確認。`curl -b cookies /login` は `/dashboard` へ 307、`curl /dashboard` (no cookie) は `/login?tab=signin&redirect=%2Fdashboard` へ 307。`bun run check` pre-existing 2 件のみ、`tsc --noEmit` は `cloudflare:workers` type 1 件のみ (pre-existing)
+- 次: Task #7 (scraper → ads UPSERT バッチ) or Task #3 (Whisper ラッパ)
+- メモ: a11y の tab には `aria-controls` / Left/Right key navigation が未対応（follow-up）。Better-Auth の sign-up flow はメール確認をスキップ (dev 想定)、本番投入前に `emailAndPassword.requireEmailVerification` を検討
 
 ### 2026-04-18 — タスク#4 ランキング一覧プロトタイプ
 
