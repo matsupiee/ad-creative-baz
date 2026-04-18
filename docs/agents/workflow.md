@@ -131,7 +131,13 @@ Reviewer は：
 
 ## 7. PR & Merge（締め）
 
-Verify と Review が通り progress.md も commit したら、PR を作ってマージする。**この一連は事前承認済みなので、毎回ユーザーに確認を取らずに実行してよい**（個人 1 名運用 + CI 未整備の MVP 期限定の運用ルール。AGENTS.md ハードルール参照）。
+Verify と Review が通り progress.md も commit したら、**そのまま一気に push → PR → squash merge まで実行する。ユーザーに確認を求めない**。
+
+- 「PR 化しますか？」「マージしていいですか？」の類いを聞くのは禁止（ユーザーから明示的な stop 指示が無い限り）。
+- 確認待ちで止まると、ユーザー側のレビュー負荷が増えるだけで品質は上がらない。代わりに **progress.md + PR description に判断根拠を残す** ことで後追い可能性を確保する。
+- 万一マージ後に問題が発覚したら revert PR を切る（これも同じく事前承認済み）。
+
+この運用は個人 1 名運用 + CI 未整備の MVP 期限定のルール。CI 導入後は `gh pr merge --auto --squash --delete-branch` に切り替える。AGENTS.md ハードルールも参照。
 
 ```bash
 # 1. push（初回は -u で upstream を張る）
