@@ -19,10 +19,9 @@
 | # | タスク | 完了条件 | ブロッカー |
 |---|---|---|---|
 | 3 | Whisper API 呼び出しのラッパ実装 | 1分の動画を投げてテキストが返る | OPENAI_API_KEY |
-| 4 | ランキング一覧画面のプロトタイプ | `/` で DB から静的データを表示できる | #2 完了済み。migration 適用待ち |
 | 5 | Better-Auth のログイン画面を MVP 用にカスタム | メール+パスワードでログイン→ダッシュボードへ遷移 | なし |
 | 6 | Stripe Subscription の最低限組み込み | テストモードで月1万円プランを購読できる | Stripe アカウント |
-| 7 | scraper の結果を `ads` / `ad_snapshots` に UPSERT するバッチ実装 | Cron 1 回で DB にレコードが積まれる | #2 の migration 適用 |
+| 7 | scraper の結果を `ads` / `ad_snapshots` に UPSERT するバッチ実装 | Cron 1 回で DB にレコードが積まれる | なし |
 
 ---
 
@@ -33,6 +32,7 @@
 - [x] harness engineering セットアップ（このファイル・AGENTS.md・CLAUDE.md・.claude/ 各種）
 - [x] **Task #1**: Playwright PoC。`apps/scraper` で `creative_radar_api/v1/top_ads/v2/list` から 20 件取得成功（US region, period=30）。videoUrl, title, brand, industry, likes が取得可能。動画URL は tiktokcdn.com の mp4 直リンク。
 - [x] **Task #2**: `packages/db/src/schema/ads.ts` で `ads` / `ad_snapshots` / `ad_transcripts` を定義。relations + as-const unions (source/region/order_by/status) をカラム型に反映。migration 生成と `db:push` は人間タスク（AGENTS.md）。
+- [x] **Task #4**: `/` でランキング一覧を DB から表示。`packages/db/src/queries/ads.ts` + `packages/api/src/routers/ads.ts` (`ads.list`) + `apps/web/src/routes/index.tsx`。ローカル D1 (Miniflare) に drizzle 初回 migration 自動適用 + `seed-sample.sql` で 12 件投入、`curl /api/rpc/ads/list` で JSON 応答を確認。
 
 ---
 
@@ -99,6 +99,14 @@
 - verify: `bun run check-types` green、`bun run check` は PRE-EXISTING 3 件のみ（新規分クリーン）
 - 未解決: (a) `play_count` / view 数はこの `/list` エンドポイントに含まれない → 詳細エンドポイント要調査。(b) JP 0 件問題。(c) `/list` は 1 ページ 20 件、ページネーション未検証
 - 次タスク: #2 `packages/db/src/schema/ads.ts` 設計
+
+### 2026-04-18 — タスク#4 ランキング一覧プロトタイプ
+
+- 変更: `packages/db/src/queries/ads.ts` (新規) / `packages/api/src/routers/ads.ts` (新規、`ads.list` zod input) / `packages/api/src/routers/index.ts` (登録) / `apps/web/src/routes/index.tsx` (ランキングカードグリッドへ置換) / `packages/db/src/migrations/0000_crazy_synch.sql` + `meta/` (drizzle-kit 生成) / `packages/db/src/seed-sample.sql` (12 件のモック) / `apps/web/.env` と `packages/infra/.env` (ローカル dev 値、gitignore 済)
+- migration 適用: `alchemy dev` が Miniflare 上で初回 migration を自動適用。`.alchemy/miniflare/v3/d1/...` に sqlite 生成を確認 → `sqlite3 $DB < packages/db/src/seed-sample.sql` で seed
+- verify: `bun run check-types` green (FULL TURBO)、`bun run check` は pre-existing 2 件のみ、`curl -s http://localhost:3001/api/rpc/ads/list --data '{"json":{...}}'` で JSON 応答 OK、home HTML が SSR でヘッダ + skeleton を描画することを確認
+- 次: Task #7 (scraper 結果を ads/ad_snapshots に UPSERT) or Task #5 (ログイン画面)
+- メモ: oRPC RPC プロトコルは body `{"json":{...}}` envelope でシリアライズする。フロント生成 SQL は `drizzle-kit generate` で作成、D1 HTTP driver は credentials が無いため `db:push` 不要・`alchemy dev` 起動時に `migrationsDir` から自動適用される
 
 ### 2026-04-18 — タスク#2 ads スキーマ追加
 

@@ -52,3 +52,6 @@ temp
 
 # PoC scraper
 apps/scraper/artifacts/
+
+# TanStack Router generated route tree
+apps/web/src/routeTree.gen.ts
