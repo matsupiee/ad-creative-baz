@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": ["Bash(*)"],
+    "bash": {
+      "allow": ["*"],
+      "deny": [
+        "rm -rf /",
+        "rm -rf ~",
+        "sudo rm -rf /",
+        "shutdown",
+        "reboot",
+        "mkfs*",
+        "dd if=* of=/dev/*",
+        ">: /dev/sd*",
+        "chmod -R 777 /",
+        "chown -R * /",
+        "git clean -fdx"
+      ]
+    },
+    "defaultMode": "default"
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_response.filePath // .tool_input.file_path' | { read -r f; case \"$f\" in *.ts|*.tsx|*.js|*.jsx|*.mjs|*.cjs) bun x oxfmt --write \"$f\";; esac; } 2>/dev/null || true",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"harness-engineering active. Read AGENTS.md first, then docs/agents/progress.md for current state. Follow the research→plan→execute→verify loop. 1 session = 1 task.\"}}'"
+          }
+        ]
+      }
+    ]
+  },
+  "includeGitInstructions": true
+}
