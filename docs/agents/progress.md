@@ -18,11 +18,11 @@
 
 | # | タスク | 完了条件 | ブロッカー |
 |---|---|---|---|
-| 2 | `packages/db/src/schema/ads.ts` のスキーマ設計 | migration が生成され、ローカル SQLite に push できる | なし（#1 完了） |
 | 3 | Whisper API 呼び出しのラッパ実装 | 1分の動画を投げてテキストが返る | OPENAI_API_KEY |
-| 4 | ランキング一覧画面のプロトタイプ | `/` で DB から静的データを表示できる | #2 |
+| 4 | ランキング一覧画面のプロトタイプ | `/` で DB から静的データを表示できる | #2 完了済み。migration 適用待ち |
 | 5 | Better-Auth のログイン画面を MVP 用にカスタム | メール+パスワードでログイン→ダッシュボードへ遷移 | なし |
 | 6 | Stripe Subscription の最低限組み込み | テストモードで月1万円プランを購読できる | Stripe アカウント |
+| 7 | scraper の結果を `ads` / `ad_snapshots` に UPSERT するバッチ実装 | Cron 1 回で DB にレコードが積まれる | #2 の migration 適用 |
 
 ---
 
@@ -32,6 +32,7 @@
 - [x] docs/mvp.md 作成
 - [x] harness engineering セットアップ（このファイル・AGENTS.md・CLAUDE.md・.claude/ 各種）
 - [x] **Task #1**: Playwright PoC。`apps/scraper` で `creative_radar_api/v1/top_ads/v2/list` から 20 件取得成功（US region, period=30）。videoUrl, title, brand, industry, likes が取得可能。動画URL は tiktokcdn.com の mp4 直リンク。
+- [x] **Task #2**: `packages/db/src/schema/ads.ts` で `ads` / `ad_snapshots` / `ad_transcripts` を定義。relations + as-const unions (source/region/order_by/status) をカラム型に反映。migration 生成と `db:push` は人間タスク（AGENTS.md）。
 
 ---
 
@@ -43,6 +44,8 @@
 - **2026-04-18**: TikTok Creative Center は API (`creative_radar_api/v1/top_ads/v2/list`) 経由で取得可能。ただし裸 fetch は 40101 (CSRF/署名ヘッダ不足) で拒否されるため、**Playwright で navigate してブラウザ自身に署名付き XHR を発行させ、response body を `page.waitForResponse` で捕捉する**路線を採用。
 - **2026-04-18**: JP region は現状 0 件（TikTok One へ移管中の告知モーダルあり）。MVP はまず US リージョンで データパイプラインを作り、JP は TikTok One 側の API が公開され次第再検証する。
 - **2026-04-18**: `/list` レスポンスには `like` はあるが `play_count` は無い。再生数取得は詳細エンドポイント調査 or 別経路が必要（Task #2 以降の課題）。
+- **2026-04-18**: `ads.id` に ULID を振らず TikTok の `material.id` をそのまま PK に採用。UPSERT とクロスシステムでの突合が容易。v2 以降で他プラットフォームを足すときは `(source, source_material_id)` の unique index で衝突を防ぐ。
+- **2026-04-18**: MVP UI は履歴を見せないが、`ad_snapshots` を先に用意。履歴は後からバックフィル不能なので、Cron 稼働前に器だけ作る。`ad_fetch_runs` は stdout + Sentry で代用し、今は作らない。
 
 ---
 
@@ -96,3 +99,12 @@
 - verify: `bun run check-types` green、`bun run check` は PRE-EXISTING 3 件のみ（新規分クリーン）
 - 未解決: (a) `play_count` / view 数はこの `/list` エンドポイントに含まれない → 詳細エンドポイント要調査。(b) JP 0 件問題。(c) `/list` は 1 ページ 20 件、ページネーション未検証
 - 次タスク: #2 `packages/db/src/schema/ads.ts` 設計
+
+### 2026-04-18 — タスク#2 ads スキーマ追加
+
+- 変更: `packages/db/src/schema/ads.ts` (新規)、`packages/db/src/schema/index.ts` (barrel)
+- 3 テーブル: `ads` (TikTok material id を PK、region/period/order_by/rank をカラム持ち、`deleted_at` 論理削除)、`ad_snapshots` (履歴)、`ad_transcripts` (1:1、`status` で Whisper→LLM パイプラインを駆動)
+- as-const unions (`AD_SOURCES`, `AD_REGIONS`, `AD_PERIODS`, `AD_ORDER_BYS`, `TRANSCRIPT_STATUSES`) を `text(..., { enum })` でカラム型に反映、`InferSelectModel` の推論が狭まるようにした
+- verify: `bun run check-types` green (FULL TURBO cache hit)、`bun run check` は pre-existing 2 件 (`packages/env/src/server.ts` triple-slash, `packages/env/src/web.ts` unused `z`)。reviewer サブエージェントで blocking 0、non-blocking 指摘の #1 (enum typing) を反映
+- 次: 人間が `bun run db:generate` → 生成 SQL を確認 → `bun run db:push` で dev D1 に適用。その後 Task #7 (scraper → DB UPSERT バッチ) へ
+- メモ: `ads.id` に ULID を振らず TikTok material id を直接採用した理由は意思決定ログ参照。`ad_snapshots` は UI 未使用だが履歴がバックフィル不能なので先に器を用意
