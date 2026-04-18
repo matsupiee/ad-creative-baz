@@ -24,6 +24,7 @@ type IngestItem = {
   industry?: string | null;
   videoVid?: string | null;
   videoUrl?: string | null;
+  videoUrlExpiresAt?: string | null;
   coverUrl?: string | null;
   durationSeconds?: number | null;
   likes?: number | null;
@@ -46,6 +47,9 @@ function toIngestItem(material: TopAdMaterial, rank: number): IngestItem | undef
   if (normalized.brand !== undefined) item.brand = normalized.brand;
   if (normalized.industry !== undefined) item.industry = normalized.industry;
   if (normalized.videoUrl !== undefined) item.videoUrl = normalized.videoUrl;
+  if (normalized.videoUrlExpiresAt !== undefined) {
+    item.videoUrlExpiresAt = normalized.videoUrlExpiresAt;
+  }
   if (normalized.coverUrl !== undefined) item.coverUrl = normalized.coverUrl;
   if (normalized.likes !== undefined) item.likes = normalized.likes;
   const videoVid = material.video_info?.vid;

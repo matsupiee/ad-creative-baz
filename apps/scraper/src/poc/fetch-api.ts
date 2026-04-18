@@ -1,6 +1,8 @@
 import type { Page } from "playwright";
 import { z } from "zod";
 
+import { parseTiktokCdnExpiry } from "../lib/video-url-expiry.ts";
+
 const materialSchema = z
   .object({
     id: z.string().optional(),
@@ -106,6 +108,7 @@ export async function fetchTopAds(page: Page, params: FetchParams): Promise<Fetc
 export type NormalizedMaterial = {
   id?: string;
   videoUrl?: string;
+  videoUrlExpiresAt?: string;
   coverUrl?: string;
   title?: string;
   brand?: string;
@@ -120,9 +123,11 @@ export function normalizeMaterial(m: TopAdMaterial): NormalizedMaterial {
     const first = Object.values(videoUrlRaw).find((v): v is string => typeof v === "string");
     videoUrl = first;
   }
+  const expiresAt = videoUrl ? parseTiktokCdnExpiry(videoUrl) : null;
   const result: NormalizedMaterial = {};
   if (m.id !== undefined) result.id = m.id;
   if (videoUrl !== undefined) result.videoUrl = videoUrl;
+  if (expiresAt !== null) result.videoUrlExpiresAt = expiresAt.toISOString();
   if (m.video_info?.cover_url !== undefined) result.coverUrl = m.video_info.cover_url;
   if (m.ad_title !== undefined) result.title = m.ad_title;
   if (m.brand_name !== undefined) result.brand = m.brand_name;

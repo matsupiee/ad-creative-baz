@@ -21,6 +21,7 @@
 | 3 | Whisper API 呼び出しのラッパ実装 | 1分の動画を投げてテキストが返る | OPENAI_API_KEY |
 | 6 | Stripe Subscription の最低限組み込み | テストモードで月1万円プランを購読できる | Stripe アカウント |
 | 8 | `ads` テーブルの bucket (region/period/orderBy/rank) を別テーブル切り出し | 同一 material が複数バケットに同時に載っても listAds が正しく返す | なし |
+| 9 | Cloudflare Cron Trigger で scraper を 4h 間隔で起動 | `wrangler.jsonc` の cron 設定 + Worker entrypoint | なし |
 
 ---
 
@@ -49,6 +50,7 @@
 - **2026-04-18**: MVP UI は履歴を見せないが、`ad_snapshots` を先に用意。履歴は後からバックフィル不能なので、Cron 稼働前に器だけ作る。`ad_fetch_runs` は stdout + Sentry で代用し、今は作らない。
 - **2026-04-18**: scraper から D1 に書く経路は、scraper プロセスが CF Workers ランタイム外にあるため直書き不可（`packages/db` が `cloudflare:workers` binding 依存）。shared secret 付き oRPC endpoint (`ads.ingest`) を噛ませて、scraper は HTTP POST に徹する構成に。token は env.INGEST_TOKEN (worker binding) と `x-ingest-token` ヘッダで constant-time 比較。
 - **2026-04-18**: `ads` テーブルの `(region, period, orderBy, rank)` カラムは Task #2 設計の延長で、UPSERT のたびに最新バケットの値で上書きされる。つまり同一 material が複数バケット（例: US/30 と US/7）に同時に載っても `listAds` は片方しか返せない。履歴は `ad_snapshots` が全量保持するので MVP 期は許容。後続 Task #8 で `ad_rankings(ad_id, region, period, orderBy, rank)` に切り出す。
+- **2026-04-18**: tiktokcdn の動画 URL は **固定 6h TTL**（path 2nd segment の hex Unix timestamp、署名バインド、tampering で 403）。20 URL サンプルで 6.001–6.072h に収束、HEAD で実 fetch 可を確認。MVP 企画書の「1日1回更新」は成立しないため、Cron は ≤6h 間隔（4h 推奨）で回す。動画ファイルの自社 rehost は MVP 方針と衝突するため不採用（法務判断が必要、スケール後の再検討枠）。スキーマに `video_url_expires_at` を追加し、`ads.ingest` は UPSERT の set に同カラムを含めて毎回上書き、UI は期限切れを除外する `freshOnly` フィルタで対処。
 
 ---
 
@@ -136,3 +138,11 @@
 - verify: `bun run check-types` green (FULL TURBO cache hit)、`bun run check` は pre-existing 2 件 (`packages/env/src/server.ts` triple-slash, `packages/env/src/web.ts` unused `z`)。reviewer サブエージェントで blocking 0、non-blocking 指摘の #1 (enum typing) を反映
 - 次: 人間が `bun run db:generate` → 生成 SQL を確認 → `bun run db:push` で dev D1 に適用。その後 Task #7 (scraper → DB UPSERT バッチ) へ
 - メモ: `ads.id` に ULID を振らず TikTok material id を直接採用した理由は意思決定ログ参照。`ad_snapshots` は UI 未使用だが履歴がバックフィル不能なので先に器を用意
+
+### 2026-04-18 — video URL 有効期限 (6h TTL) 判明 + スキーマ + ingest 対応
+
+- 調査: tiktokcdn URL の path 2nd segment (`<md5>/<exp_hex>/video/...`) が Unix epoch (hex)。20 URL 抽出で 6.001–6.072h に収束 → **固定 6h TTL**。`HEAD` で 206/video/mp4 取得確認、`exp_hex` を deadbeef に差し替えると 403（署名バインド）
+- 変更: `packages/db/src/schema/ads.ts` (`video_url_expires_at` 追加 + `ads_region_period_expires_idx`)、`apps/scraper/src/lib/video-url-expiry.ts` (新規、`parseTiktokCdnExpiry(url): Date | null` 純粋関数 + sanity window)、`apps/scraper/src/poc/fetch-api.ts` (`NormalizedMaterial.videoUrlExpiresAt` を ISO で emit)、`apps/scraper/src/ingest/run.ts` (IngestItem に expiry を渡す)、`packages/api/src/routers/ads.ts` (`ingestItemSchema` に `videoUrlExpiresAt`, `list` に `freshOnly?: boolean`)、`packages/db/src/queries/ads.ts` (`upsertAds` set 句に expiry、`listAds` に freshOnly)、`packages/db/src/seed-sample.sql` (+30d を 12 行に埋め込み)、`packages/db/src/migrations/0001_yellow_hellfire_club.sql` (drizzle-kit 生成)
+- verify: `bun run check` / `check-types` green (pre-existing 2 件のみ)。`bun run build` は `apps/web/.alchemy/local/wrangler.jsonc` 未生成で環境 fail（diff と無関係、`alchemy dev` で解消）。reviewer blocking 1 (migration 欠落) → 本セッション内で `db:generate` 実行して解消、non-blocking 3 件は receipt
+- 次: 人間は alchemy dev で migration 自動適用 → `bun run ingest` で smoke test（expires_at が埋まるか）。次タスクは #8 (bucket 切り出し) or #9 (Cloudflare Cron Trigger 4h 間隔)
+- メモ: MVP 企画書の「1日1回更新」は 6h TTL により成立しない。R2 rehost は MVP 方針（動画非保持）と衝突、法務判断保留。`freshOnly` デフォルト false は既存 ads レコード（expiry 未埋め）がまだ想定されるため。バッチ稼働後に default true へ切替 + UI ルートが明示的に false で呼ぶ設計

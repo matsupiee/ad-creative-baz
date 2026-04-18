@@ -19,6 +19,7 @@ const listInputSchema = z.object({
   period: periodSchema.default(30),
   orderBy: z.enum(AD_ORDER_BYS).default("for_you"),
   limit: z.number().int().min(1).max(100).default(20),
+  freshOnly: z.boolean().default(false),
 });
 
 export type AdsListInput = z.infer<typeof listInputSchema>;
@@ -41,6 +42,7 @@ const ingestItemSchema = z.object({
   industry: z.string().max(128).nullish(),
   videoVid: z.string().max(128).nullish(),
   videoUrl: z.string().url().max(2048).nullish(),
+  videoUrlExpiresAt: z.coerce.date().nullish(),
   coverUrl: z.string().url().max(2048).nullish(),
   durationSeconds: z.number().int().nonnegative().max(3600).nullish(),
   likes: z.number().int().nonnegative().nullish(),
