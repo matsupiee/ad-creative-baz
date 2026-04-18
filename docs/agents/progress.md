@@ -19,10 +19,9 @@
 | # | タスク | 完了条件 | ブロッカー |
 |---|---|---|---|
 | 3 | Whisper API 呼び出しのラッパ実装 | 1分の動画を投げてテキストが返る | OPENAI_API_KEY |
-| 5 | Better-Auth のログイン画面を MVP 用にカスタム | メール+パスワードでログイン→ダッシュボードへ遷移 | なし |
 | 6 | Stripe Subscription の最低限組み込み | テストモードで月1万円プランを購読できる | Stripe アカウント |
-| 7 | scraper の結果を `ads` / `ad_snapshots` に UPSERT するバッチ実装 | Cron (≤6h 間隔) 1 回で DB にレコードが積まれ、`video_url_expires_at` も埋まる | なし |
-| 8 | Cloudflare Cron Trigger で scraper を 4h 間隔で起動 | `wrangler.jsonc` の cron 設定 + Worker entrypoint | Task #7 |
+| 8 | `ads` テーブルの bucket (region/period/orderBy/rank) を別テーブル切り出し | 同一 material が複数バケットに同時に載っても listAds が正しく返す | なし |
+| 9 | Cloudflare Cron Trigger で scraper を 4h 間隔で起動 | `wrangler.jsonc` の cron 設定 + Worker entrypoint | なし |
 
 ---
 
@@ -34,6 +33,8 @@
 - [x] **Task #1**: Playwright PoC。`apps/scraper` で `creative_radar_api/v1/top_ads/v2/list` から 20 件取得成功（US region, period=30）。videoUrl, title, brand, industry, likes が取得可能。動画URL は tiktokcdn.com の mp4 直リンク。
 - [x] **Task #2**: `packages/db/src/schema/ads.ts` で `ads` / `ad_snapshots` / `ad_transcripts` を定義。relations + as-const unions (source/region/order_by/status) をカラム型に反映。migration 生成と `db:push` は人間タスク（AGENTS.md）。
 - [x] **Task #4**: `/` でランキング一覧を DB から表示。`packages/db/src/queries/ads.ts` + `packages/api/src/routers/ads.ts` (`ads.list`) + `apps/web/src/routes/index.tsx`。ローカル D1 (Miniflare) に drizzle 初回 migration 自動適用 + `seed-sample.sql` で 12 件投入、`curl /api/rpc/ads/list` で JSON 応答を確認。
+- [x] **Task #5**: `/login` をタブ付きカード UI にカスタム（Sign In デフォルト、ブランドヘッダ）、`beforeLoad` でログイン済ユーザを redirect 先へ戻す、`/dashboard` は Welcome / email / View Ranking ボタン付き Card へ。sign-in/sign-up form は `redirectTo` prop を受け取る presentational 形に分離。`?redirect=` は allowlist (`["/dashboard","/"]`) + `.catch()` で open-redirect 防止。curl でサインアップ → ログイン → `/dashboard` 表示まで確認。
+- [x] **Task #7**: scraper → `ads` / `ad_snapshots` UPSERT。`ads.ingest` oRPC endpoint (token gated) + `apps/scraper/src/ingest/run.ts` バッチ。`db.batch([upsertAds, insertSnapshots])` で一括。snapshot PK は `(source, material, region, period, orderBy, capturedAt)` を合成。
 
 ---
 
@@ -47,7 +48,9 @@
 - **2026-04-18**: `/list` レスポンスには `like` はあるが `play_count` は無い。再生数取得は詳細エンドポイント調査 or 別経路が必要（Task #2 以降の課題）。
 - **2026-04-18**: `ads.id` に ULID を振らず TikTok の `material.id` をそのまま PK に採用。UPSERT とクロスシステムでの突合が容易。v2 以降で他プラットフォームを足すときは `(source, source_material_id)` の unique index で衝突を防ぐ。
 - **2026-04-18**: MVP UI は履歴を見せないが、`ad_snapshots` を先に用意。履歴は後からバックフィル不能なので、Cron 稼働前に器だけ作る。`ad_fetch_runs` は stdout + Sentry で代用し、今は作らない。
-- **2026-04-18**: tiktokcdn の動画 URL は **固定 6h TTL**（path 2nd segment の hex Unix timestamp、署名バインド、tampering で 403）。20 URL サンプルで 6.001–6.072h に収束、HEAD で実 fetch 可を確認。MVP 企画書の「1日1回更新」は成立しないため、Cron は ≤6h 間隔（4h 推奨）で回す。動画ファイルの自社 rehost は MVP 方針と衝突するため不採用（法務判断が必要、スケール後の再検討枠）。スキーマに `video_url_expires_at` を追加し、UI は期限切れを除外する `freshOnly` フィルタで対処。
+- **2026-04-18**: scraper から D1 に書く経路は、scraper プロセスが CF Workers ランタイム外にあるため直書き不可（`packages/db` が `cloudflare:workers` binding 依存）。shared secret 付き oRPC endpoint (`ads.ingest`) を噛ませて、scraper は HTTP POST に徹する構成に。token は env.INGEST_TOKEN (worker binding) と `x-ingest-token` ヘッダで constant-time 比較。
+- **2026-04-18**: `ads` テーブルの `(region, period, orderBy, rank)` カラムは Task #2 設計の延長で、UPSERT のたびに最新バケットの値で上書きされる。つまり同一 material が複数バケット（例: US/30 と US/7）に同時に載っても `listAds` は片方しか返せない。履歴は `ad_snapshots` が全量保持するので MVP 期は許容。後続 Task #8 で `ad_rankings(ad_id, region, period, orderBy, rank)` に切り出す。
+- **2026-04-18**: tiktokcdn の動画 URL は **固定 6h TTL**（path 2nd segment の hex Unix timestamp、署名バインド、tampering で 403）。20 URL サンプルで 6.001–6.072h に収束、HEAD で実 fetch 可を確認。MVP 企画書の「1日1回更新」は成立しないため、Cron は ≤6h 間隔（4h 推奨）で回す。動画ファイルの自社 rehost は MVP 方針と衝突するため不採用（法務判断が必要、スケール後の再検討枠）。スキーマに `video_url_expires_at` を追加し、`ads.ingest` は UPSERT の set に同カラムを含めて毎回上書き、UI は期限切れを除外する `freshOnly` フィルタで対処。
 
 ---
 
@@ -102,6 +105,14 @@
 - 未解決: (a) `play_count` / view 数はこの `/list` エンドポイントに含まれない → 詳細エンドポイント要調査。(b) JP 0 件問題。(c) `/list` は 1 ページ 20 件、ページネーション未検証
 - 次タスク: #2 `packages/db/src/schema/ads.ts` 設計
 
+### 2026-04-18 — タスク#5 ログイン画面 MVP カスタム
+
+- 変更: `apps/web/src/routes/login.tsx` (タブ付きカード + `validateSearch` zod + `beforeLoad` auto-redirect), `apps/web/src/routes/dashboard.tsx` (Welcome カード + View Ranking 導線), `apps/web/src/components/sign-in-form.tsx` / `sign-up-form.tsx` (wrapper/フッタリンク削除、`redirectTo` prop へ差し替え)
+- セキュリティ: `?redirect=` を `REDIRECT_ALLOWLIST = ["/dashboard","/"]` の `z.enum` + `.catch()` で allowlist 化（`//evil.com` 等の open-redirect 攻撃は静かにデフォルトへフォールバック）、`navigate({ href })` を `navigate({ to })` へ変更して TanStack Router の typed path にバインド
+- verify: `bun run dev` で `curl -X POST /api/auth/sign-up/email` → `curl /api/auth/sign-in/email` → `curl -b cookies /dashboard` で HTTP 200 + "Welcome Alice / alice@example.com / View Ranking" を確認。`curl -b cookies /login` は `/dashboard` へ 307、`curl /dashboard` (no cookie) は `/login?tab=signin&redirect=%2Fdashboard` へ 307。`bun run check` pre-existing 2 件のみ、`tsc --noEmit` は `cloudflare:workers` type 1 件のみ (pre-existing)
+- 次: Task #7 (scraper → ads UPSERT バッチ) or Task #3 (Whisper ラッパ)
+- メモ: a11y の tab には `aria-controls` / Left/Right key navigation が未対応（follow-up）。Better-Auth の sign-up flow はメール確認をスキップ (dev 想定)、本番投入前に `emailAndPassword.requireEmailVerification` を検討
+
 ### 2026-04-18 — タスク#4 ランキング一覧プロトタイプ
 
 - 変更: `packages/db/src/queries/ads.ts` (新規) / `packages/api/src/routers/ads.ts` (新規、`ads.list` zod input) / `packages/api/src/routers/index.ts` (登録) / `apps/web/src/routes/index.tsx` (ランキングカードグリッドへ置換) / `packages/db/src/migrations/0000_crazy_synch.sql` + `meta/` (drizzle-kit 生成) / `packages/db/src/seed-sample.sql` (12 件のモック) / `apps/web/.env` と `packages/infra/.env` (ローカル dev 値、gitignore 済)
@@ -109,6 +120,15 @@
 - verify: `bun run check-types` green (FULL TURBO)、`bun run check` は pre-existing 2 件のみ、`curl -s http://localhost:3001/api/rpc/ads/list --data '{"json":{...}}'` で JSON 応答 OK、home HTML が SSR でヘッダ + skeleton を描画することを確認
 - 次: Task #7 (scraper 結果を ads/ad_snapshots に UPSERT) or Task #5 (ログイン画面)
 - メモ: oRPC RPC プロトコルは body `{"json":{...}}` envelope でシリアライズする。フロント生成 SQL は `drizzle-kit generate` で作成、D1 HTTP driver は credentials が無いため `db:push` 不要・`alchemy dev` 起動時に `migrationsDir` から自動適用される
+
+### 2026-04-18 — タスク#7 scraper → ads/ad_snapshots UPSERT
+
+- 変更: `packages/db/src/queries/ads.ts` (upsertAds 追加、db.batch で ads upsert + ad_snapshots insert を一括) / `packages/api/src/context.ts` (context.headers を露出) / `packages/api/src/routers/ads.ts` (`ingest` procedure、constant-time token 比較) / `packages/env/env.d.ts` 経由で `INGEST_TOKEN` binding (`packages/infra/alchemy.run.ts`) / `apps/scraper/src/env.ts` (INGEST_API_URL / INGEST_TOKEN) / `apps/scraper/src/ingest/run.ts` (新規、Playwright で (country, period) を回して ingest POST) / `apps/scraper/package.json` + `turbo.json` + root `package.json` (`ingest` script 配線) / `apps/scraper/README.md` 更新
+- 経路: scraper → `POST {INGEST_API_URL}/api/rpc/ads/ingest` with `x-ingest-token` → oRPC `ads.ingest` handler → `upsertAds` で `INSERT ... ON CONFLICT DO UPDATE` + `ad_snapshots` INSERT (`db.batch` で atomic)。snapshot PK は `source:material:region:period:orderBy:capturedAt` 合成キー
+- verify: `bun run check-types` green (packages/api, packages/db は scripts 上 check-types 無しだったため `bunx tsc --noEmit --project` で手動確認)、`bun run check` は pre-existing 2 件のみ。`bun run build` は `apps/web` が alchemy dev 未起動だと `wrangler.jsonc` が無く失敗するが、これは環境要件で本変更と無関係
+- Reviewer fix: (1) token 比較を constant-time に、(2) snapshot PK にバケットを含めて collision 回避、(3) `ads` テーブルの bucket 上書き問題は Task #2 由来の設計課題として Task #8 に切り出し
+- 次: 人間が alchemy dev 起動 + `INGEST_TOKEN` を `.env` に設定 → `bun run ingest` で smoke test。Task #3 (Whisper) / Task #5 (ログイン UI) / Task #8 (ad_rankings 切り出し) のいずれかへ
+- メモ: `packages/api` と `packages/db` に `check-types` script が無いので turbo からは型チェックされていない。これは既存のテスト穴。本セッションでは対象外にしたが、いずれ workflow.md に反映すべき
 
 ### 2026-04-18 — タスク#2 ads スキーマ追加
 
@@ -119,10 +139,10 @@
 - 次: 人間が `bun run db:generate` → 生成 SQL を確認 → `bun run db:push` で dev D1 に適用。その後 Task #7 (scraper → DB UPSERT バッチ) へ
 - メモ: `ads.id` に ULID を振らず TikTok material id を直接採用した理由は意思決定ログ参照。`ad_snapshots` は UI 未使用だが履歴がバックフィル不能なので先に器を用意
 
-### 2026-04-18 — video URL 有効期限 (6h TTL) 判明 + スキーマ対応
+### 2026-04-18 — video URL 有効期限 (6h TTL) 判明 + スキーマ + ingest 対応
 
 - 調査: tiktokcdn URL の path 2nd segment (`<md5>/<exp_hex>/video/...`) が Unix epoch (hex)。20 URL 抽出で 6.001–6.072h に収束 → **固定 6h TTL**。`HEAD` で 206/video/mp4 取得確認、`exp_hex` を deadbeef に差し替えると 403（署名バインド）
-- 変更: `packages/db/src/schema/ads.ts` (`video_url_expires_at` 追加 + `ads_region_period_expires_idx`)、`apps/scraper/src/lib/video-url-expiry.ts` (新規、`parseTiktokCdnExpiry(url): Date | null` 純粋関数 + sanity window)、`apps/scraper/src/poc/fetch-api.ts` (`NormalizedMaterial.videoUrlExpiresAt` を ISO で emit)、`packages/db/src/seed-sample.sql` (+30d を 12 行に埋め込み)、`packages/db/src/queries/ads.ts` + `packages/api/src/routers/ads.ts` (`freshOnly?: boolean`, default false)、`packages/db/src/migrations/0001_yellow_hellfire_club.sql` (drizzle-kit 生成)
+- 変更: `packages/db/src/schema/ads.ts` (`video_url_expires_at` 追加 + `ads_region_period_expires_idx`)、`apps/scraper/src/lib/video-url-expiry.ts` (新規、`parseTiktokCdnExpiry(url): Date | null` 純粋関数 + sanity window)、`apps/scraper/src/poc/fetch-api.ts` (`NormalizedMaterial.videoUrlExpiresAt` を ISO で emit)、`apps/scraper/src/ingest/run.ts` (IngestItem に expiry を渡す)、`packages/api/src/routers/ads.ts` (`ingestItemSchema` に `videoUrlExpiresAt`, `list` に `freshOnly?: boolean`)、`packages/db/src/queries/ads.ts` (`upsertAds` set 句に expiry、`listAds` に freshOnly)、`packages/db/src/seed-sample.sql` (+30d を 12 行に埋め込み)、`packages/db/src/migrations/0001_yellow_hellfire_club.sql` (drizzle-kit 生成)
 - verify: `bun run check` / `check-types` green (pre-existing 2 件のみ)。`bun run build` は `apps/web/.alchemy/local/wrangler.jsonc` 未生成で環境 fail（diff と無関係、`alchemy dev` で解消）。reviewer blocking 1 (migration 欠落) → 本セッション内で `db:generate` 実行して解消、non-blocking 3 件は receipt
-- 次: 人間は `db:push` は任意（alchemy dev 起動時に自動 migration 適用）。次タスクは #7 (scraper→DB UPSERT、`videoUrlExpiresAt` 込みで UPSERT) → #8 (Cloudflare Cron Trigger を 4h 間隔で設定)
-- メモ: MVP 企画書の「1日1回更新」は 6h TTL により成立しない。R2 rehost は MVP 方針（動画非保持）と衝突、法務判断保留。`freshOnly` デフォルト false は seed 未対応行がまだ想定されるため。Task #7 完了後に default true へ切り替え + UI ルートが明示的に false で呼ぶ設計
+- 次: 人間は alchemy dev で migration 自動適用 → `bun run ingest` で smoke test（expires_at が埋まるか）。次タスクは #8 (bucket 切り出し) or #9 (Cloudflare Cron Trigger 4h 間隔)
+- メモ: MVP 企画書の「1日1回更新」は 6h TTL により成立しない。R2 rehost は MVP 方針（動画非保持）と衝突、法務判断保留。`freshOnly` デフォルト false は既存 ads レコード（expiry 未埋め）がまだ想定されるため。バッチ稼働後に default true へ切替 + UI ルートが明示的に false で呼ぶ設計

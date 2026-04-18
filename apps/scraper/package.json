@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "poc:topads": "bun run src/poc/topads.ts",
+    "ingest": "bun run src/ingest/run.ts",
     "check-types": "tsc --noEmit"
   },
   "dependencies": {

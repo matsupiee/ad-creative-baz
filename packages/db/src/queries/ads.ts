@@ -1,8 +1,8 @@
 import { and, asc, eq, gt, isNull, sql } from "drizzle-orm";
 
 import { createDb } from "../index";
-import type { AdOrderBy, AdPeriod, AdRegion } from "../schema/ads";
-import { ads } from "../schema/ads";
+import type { AdOrderBy, AdPeriod, AdRegion, NewAd, NewAdSnapshot } from "../schema/ads";
+import { adSnapshots, ads } from "../schema/ads";
 
 export interface ListAdsInput {
   region: AdRegion;
@@ -48,3 +48,115 @@ export async function listAds({ region, period, orderBy, limit, freshOnly }: Lis
 }
 
 export type AdListItem = Awaited<ReturnType<typeof listAds>>[number];
+
+export interface UpsertAdItem {
+  sourceMaterialId: string;
+  title?: string | null;
+  brand?: string | null;
+  industry?: string | null;
+  videoVid?: string | null;
+  videoUrl?: string | null;
+  videoUrlExpiresAt?: Date | null;
+  coverUrl?: string | null;
+  durationSeconds?: number | null;
+  likes?: number | null;
+  playCount?: number | null;
+  shares?: number | null;
+  rank?: number | null;
+}
+
+export interface UpsertAdsInput {
+  source: "tiktok";
+  region: AdRegion;
+  period: AdPeriod;
+  orderBy: AdOrderBy;
+  capturedAt: Date;
+  items: UpsertAdItem[];
+}
+
+export interface UpsertAdsResult {
+  upsertedAds: number;
+  insertedSnapshots: number;
+}
+
+export async function upsertAds(input: UpsertAdsInput): Promise<UpsertAdsResult> {
+  const { source, region, period, orderBy, capturedAt, items } = input;
+  if (items.length === 0) {
+    return { upsertedAds: 0, insertedSnapshots: 0 };
+  }
+
+  const db = createDb();
+
+  const adRows: NewAd[] = items.map((item) => ({
+    id: `${source}:${item.sourceMaterialId}`,
+    source,
+    sourceMaterialId: item.sourceMaterialId,
+    title: item.title ?? null,
+    brand: item.brand ?? null,
+    industry: item.industry ?? null,
+    videoVid: item.videoVid ?? null,
+    videoUrl: item.videoUrl ?? null,
+    videoUrlExpiresAt: item.videoUrlExpiresAt ?? null,
+    coverUrl: item.coverUrl ?? null,
+    durationSeconds: item.durationSeconds ?? null,
+    likes: item.likes ?? null,
+    playCount: item.playCount ?? null,
+    shares: item.shares ?? null,
+    region,
+    period,
+    orderBy,
+    rank: item.rank ?? null,
+    lastSeenAt: capturedAt,
+  }));
+
+  // Snapshot PK は (source, material, region, period, orderBy, capturedAt) を合成。
+  // これにより異なるバケットや同一 ms の再取得がぶつからない。
+  const snapshotRows: NewAdSnapshot[] = items.map((item) => ({
+    id: `${source}:${item.sourceMaterialId}:${region}:${period}:${orderBy}:${capturedAt.getTime()}`,
+    adId: `${source}:${item.sourceMaterialId}`,
+    region,
+    period,
+    orderBy,
+    rank: item.rank ?? null,
+    likes: item.likes ?? null,
+    playCount: item.playCount ?? null,
+    shares: item.shares ?? null,
+    capturedAt,
+  }));
+
+  // NOTE: `ads` テーブルは region/period/orderBy/rank をカラムに持つため、
+  // 同じ material が別バケットで上位に来た場合、最新の INGEST だけが `ads` に反映される
+  // （履歴は ad_snapshots で保持）。複数バケットを並行して listAds したいときは
+  // 将来的に `ad_rankings(ad_id, region, period, orderBy, rank)` を切り出すこと。
+  const upsertAdsStmt = db
+    .insert(ads)
+    .values(adRows)
+    .onConflictDoUpdate({
+      target: ads.id,
+      set: {
+        title: sql`excluded.title`,
+        brand: sql`excluded.brand`,
+        industry: sql`excluded.industry`,
+        videoVid: sql`excluded.video_vid`,
+        videoUrl: sql`excluded.video_url`,
+        videoUrlExpiresAt: sql`excluded.video_url_expires_at`,
+        coverUrl: sql`excluded.cover_url`,
+        durationSeconds: sql`excluded.duration_seconds`,
+        likes: sql`excluded.likes`,
+        playCount: sql`excluded.play_count`,
+        shares: sql`excluded.shares`,
+        region: sql`excluded.region`,
+        period: sql`excluded.period`,
+        orderBy: sql`excluded.order_by`,
+        rank: sql`excluded.rank`,
+        lastSeenAt: sql`excluded.last_seen_at`,
+        deletedAt: sql`NULL`,
+      },
+    });
+
+  const insertSnapshotsStmt = db.insert(adSnapshots).values(snapshotRows).onConflictDoNothing();
+
+  await db.batch([upsertAdsStmt, insertSnapshotsStmt]);
+
+  return { upsertedAds: adRows.length, insertedSnapshots: snapshotRows.length };
+}
