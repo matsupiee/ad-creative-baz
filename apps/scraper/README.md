@@ -45,6 +45,18 @@ stderr に `{"status":"blocked"|"empty","reason":"..."}` が出力され、`apps
 
 両方試してどちらかで取れれば ok。
 
+## Ingest バッチ
+
+`poc:topads` と同じ経路で収集した結果を `apps/web` の `ads.ingest` oRPC エンドポイントに POST し、`ads` / `ad_snapshots` に UPSERT する。Cron からの定期実行を想定。
+
+```bash
+bun run ingest
+```
+
+- `INGEST_API_URL`（例: `http://localhost:3001` や本番 `https://<host>`）と `INGEST_TOKEN` が必須。
+- stdout に 1 行 JSON: `{"status":"ok","results":[{"region":"US","period":30,"captured":20,"upsertedAds":20,"insertedSnapshots":20}, ...],"failures":[...]}`
+- `apps/web` 側は `INGEST_TOKEN` バインディングを持ち、`x-ingest-token` ヘッダで突合する。
+
 ## 環境変数
 
 `apps/scraper/.env` に記述（gitignore 済み）：
@@ -54,6 +66,8 @@ stderr に `{"status":"blocked"|"empty","reason":"..."}` が出力され、`apps
 | `TIKTOK_LOCALE` | `en` | TikTok Creative Center のロケール |
 | `PLAYWRIGHT_HEADLESS` | `true` | ヘッドレス可否。デバッグ時は `false` |
 | `PROXY_URL` | （未設定） | プロキシ URL。必要になったら設定 |
+| `INGEST_API_URL` | （未設定） | `apps/web` のベース URL。末尾 `/` は任意 |
+| `INGEST_TOKEN` | （未設定） | ingest エンドポイント用の shared secret |
 
 ## 設計メモ
 

@@ -33,6 +33,11 @@
       "cache": false,
       "persistent": false,
       "dependsOn": []
+    },
+    "ingest": {
+      "cache": false,
+      "persistent": false,
+      "dependsOn": []
     }
   }
 }

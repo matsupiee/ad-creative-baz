@@ -12,6 +12,8 @@ export const env = createEnv({
       .optional()
       .transform((v) => (v === undefined ? true : v !== "false" && v !== "0")),
     PROXY_URL: z.string().url().optional(),
+    INGEST_API_URL: z.string().url().optional(),
+    INGEST_TOKEN: z.string().min(1).optional(),
   },
   runtimeEnv: process.env,
   emptyStringAsUndefined: true,
