@@ -1,8 +1,19 @@
-import { and, asc, eq, gt, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNull, sql } from "drizzle-orm";
 
 import { createDb } from "../index";
 import type { AdOrderBy, AdPeriod, AdRegion, NewAd, NewAdSnapshot } from "../schema/ads";
 import { adSnapshots, ads } from "../schema/ads";
+
+export type AdListSort = "score" | "tiktok_rank";
+
+// likes × 鮮度のハイブリッドスコア。half-life = 7d、指数減衰。
+// likes IS NULL は 0 として最下位に沈む（実 ingest では likes は必ず取得できる前提。
+// 取得失敗が常態化したら sort 戦略から見直す）。
+// 鮮度は ads.lastSeenAt 基準。Task #8 で ad_rankings 切り出し時はこの式の参照先を
+// `ad_rankings.lastSeenAt` に乗せ替えること（バケット別の鮮度になる）。
+const HALF_LIFE_DAYS = 7;
+const DECAY_LAMBDA = Math.LN2 / HALF_LIFE_DAYS;
+const scoreExpr = sql`coalesce(${ads.likes}, 0) * exp(${-DECAY_LAMBDA} * (unixepoch('subsecond') - ${ads.lastSeenAt} / 1000.0) / 86400.0)`;
 
 export interface ListAdsInput {
   region: AdRegion;
@@ -10,10 +21,23 @@ export interface ListAdsInput {
   orderBy: AdOrderBy;
   limit: number;
   freshOnly?: boolean;
+  sort?: AdListSort;
 }
 
-export async function listAds({ region, period, orderBy, limit, freshOnly }: ListAdsInput) {
+export async function listAds({
+  region,
+  period,
+  orderBy,
+  limit,
+  freshOnly,
+  sort = "score",
+}: ListAdsInput) {
   const db = createDb();
+
+  const orderClauses =
+    sort === "score"
+      ? [desc(scoreExpr), sql`${ads.rank} IS NULL`, asc(ads.rank)]
+      : [sql`${ads.rank} IS NULL`, asc(ads.rank)];
 
   return db
     .select({
@@ -43,7 +67,7 @@ export async function listAds({ region, period, orderBy, limit, freshOnly }: Lis
         freshOnly ? gt(ads.videoUrlExpiresAt, new Date()) : undefined,
       ),
     )
-    .orderBy(sql`${ads.rank} IS NULL`, asc(ads.rank))
+    .orderBy(...orderClauses)
     .limit(limit);
 }
 

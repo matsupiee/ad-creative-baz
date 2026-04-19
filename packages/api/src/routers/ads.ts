@@ -6,20 +6,37 @@ import { z } from "zod";
 
 import { publicProcedure } from "../index";
 
-const periodSchema = z.union(
-  AD_PERIODS.map((value) => z.literal(value)) as [
-    z.ZodLiteral<(typeof AD_PERIODS)[0]>,
-    z.ZodLiteral<(typeof AD_PERIODS)[1]>,
-    z.ZodLiteral<(typeof AD_PERIODS)[2]>,
+// API 入力として受け付ける列挙。今は DB enum と同一だが、API が DB の部分集合だけ
+// 受けたい局面が来たら API 側で絞れるよう一次の alias を切っておく。
+export const AD_LIST_REGIONS = AD_REGIONS;
+export const AD_LIST_PERIODS = AD_PERIODS;
+export const AD_LIST_SORTS = ["score", "tiktok_rank"] as const;
+
+export type AdListRegion = (typeof AD_LIST_REGIONS)[number];
+export type AdListPeriod = (typeof AD_LIST_PERIODS)[number];
+export type AdListSort = (typeof AD_LIST_SORTS)[number];
+
+// AD_LIST_PERIODS は数値リテラルなので z.enum が使えず z.union で組む。
+// 配列長が変わったらここの as cast も追従させる必要がある（テストは無いので
+// AD_LIST_PERIODS を変更したら手動で要素数を合わせること）。
+export const adListPeriodSchema = z.union(
+  AD_LIST_PERIODS.map((value) => z.literal(value)) as [
+    z.ZodLiteral<(typeof AD_LIST_PERIODS)[0]>,
+    z.ZodLiteral<(typeof AD_LIST_PERIODS)[1]>,
+    z.ZodLiteral<(typeof AD_LIST_PERIODS)[2]>,
   ],
 );
 
+export const adListRegionSchema = z.enum(AD_LIST_REGIONS);
+export const adListSortSchema = z.enum(AD_LIST_SORTS);
+
 const listInputSchema = z.object({
-  region: z.enum(AD_REGIONS).default("US"),
-  period: periodSchema.default(30),
+  region: adListRegionSchema.default("US"),
+  period: adListPeriodSchema.default(7),
   orderBy: z.enum(AD_ORDER_BYS).default("for_you"),
   limit: z.number().int().min(1).max(100).default(20),
   freshOnly: z.boolean().default(false),
+  sort: adListSortSchema.default("score"),
 });
 
 export type AdsListInput = z.infer<typeof listInputSchema>;
@@ -54,7 +71,7 @@ const ingestItemSchema = z.object({
 const ingestInputSchema = z.object({
   source: z.enum(AD_SOURCES).default("tiktok"),
   region: z.enum(AD_REGIONS),
-  period: periodSchema,
+  period: adListPeriodSchema,
   orderBy: z.enum(AD_ORDER_BYS),
   capturedAt: z.coerce.date().default(() => new Date()),
   items: z.array(ingestItemSchema).min(1).max(200),

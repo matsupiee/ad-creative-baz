@@ -51,6 +51,8 @@
 - **2026-04-18**: scraper から D1 に書く経路は、scraper プロセスが CF Workers ランタイム外にあるため直書き不可（`packages/db` が `cloudflare:workers` binding 依存）。shared secret 付き oRPC endpoint (`ads.ingest`) を噛ませて、scraper は HTTP POST に徹する構成に。token は env.INGEST_TOKEN (worker binding) と `x-ingest-token` ヘッダで constant-time 比較。
 - **2026-04-18**: `ads` テーブルの `(region, period, orderBy, rank)` カラムは Task #2 設計の延長で、UPSERT のたびに最新バケットの値で上書きされる。つまり同一 material が複数バケット（例: US/30 と US/7）に同時に載っても `listAds` は片方しか返せない。履歴は `ad_snapshots` が全量保持するので MVP 期は許容。後続 Task #8 で `ad_rankings(ad_id, region, period, orderBy, rank)` に切り出す。
 - **2026-04-18**: tiktokcdn の動画 URL は **固定 6h TTL**（path 2nd segment の hex Unix timestamp、署名バインド、tampering で 403）。20 URL サンプルで 6.001–6.072h に収束、HEAD で実 fetch 可を確認。MVP 企画書の「1日1回更新」は成立しないため、Cron は ≤6h 間隔（4h 推奨）で回す。動画ファイルの自社 rehost は MVP 方針と衝突するため不採用（法務判断が必要、スケール後の再検討枠）。スキーマに `video_url_expires_at` を追加し、`ads.ingest` は UPSERT の set に同カラムを含めて毎回上書き、UI は期限切れを除外する `freshOnly` フィルタで対処。
+- **2026-04-19**: ホーム画面ランキングを TikTok 側 `rank` 純から **likes × 鮮度ハイブリッドスコア** に切替。式: `coalesce(likes, 0) * exp(-LN2 * days_since_last_seen / HALF_LIFE_DAYS)`、`HALF_LIFE_DAYS = 7`（ingest 4h 間隔で likes が同日内に大きく動くため、3〜5d より穏やかな 7d を採用）。鮮度基準は `ads.lastSeenAt`（圏外落ち広告が自然減衰、エバーグリーンを `firstSeenAt` で不当ペナルティしない）。`likes` IS NULL は score=0 で最下位扱い（実 ingest では likes は必ず取れる前提、取れなくなったら戦略再考）。`play_count` は `/list` v2 に含まれず NULL 多数のため score 入力に使わない。Task #8 で `ad_rankings` 切り出し時は scoreExpr の参照先を `ad_rankings.lastSeenAt` に乗せ替えること（バケット別の鮮度になる）。
+- **2026-04-19**: API デフォルト period を 30 → 7 に変更。ホーム画面が URL search で region/period を切替可能になり (`?region=JP&period=7` 等)、デフォルト UI が常に最も新鮮な 7d バケットを見せる方針。JP は scraper 側で 0 件問題が残っているので UI から JP を選ぶと空表示になるが、TikTok One 復活時に即試せる導線として残す。
 
 ---
 
@@ -149,6 +151,16 @@
 - verify: `bun run ingest` で US/30=19 件・US/180=20 件取り込み成功（US/7 は TikTok 側で空）、`bun run check-types` green、`bun run build` green (1.93s)、`bun run check` は pre-existing 2 件のみ。Playwright で `/` を headless 描画 → `<video>` が readyState=4・videoW/H 解像度取得・CDN から 206 応答・console/page error 0 を確認
 - 次: (a) `/` は `freshOnly=false` デフォルトなので 6h 経過後に 403 動画が混ざる（Task #9 Cron 稼働後に default true 切替 or UI 側でフィルタ）、(b) scraper は Playwright goto でログインモーダル等に引っかかる可能性あり US/7 の「empty materials」は今のところ TikTok 実態なのか goto 失敗なのか切り分け必要
 - メモ: D1 bound-param 上限は Cloudflare 公式には 5000 とも書かれるが実測で 1416 変数付近で SQLITE_ERROR。余裕を持って 3 items/batch にした。`cover_url` 欠落は TikTok の `/list` v2 仕様のようで、詳細取得エンドポイント（Task #2 で触れた play_count 取得と同じ経路）で補完する余地あり
+
+### 2026-04-19 — ランキングを likes × 鮮度ハイブリッドスコアに切替 + URL search で region/period 切替
+
+- 変更: `packages/db/src/queries/ads.ts` (`AdListSort` 型 + `scoreExpr` 指数減衰式 + `listAds` の sort 引数), `packages/api/src/routers/ads.ts` (`AD_LIST_REGIONS`/`AD_LIST_PERIODS`/`AD_LIST_SORTS` の API 一次 alias、`adListPeriodSchema` / `adListRegionSchema` / `adListSortSchema` を export し ingest schema にも流用、`listInputSchema.period.default(7)`, `sort` フィールド追加), `apps/web/src/routes/index.tsx` (`validateSearch` で URL ?region=&period= 駆動、region/period ボタン群、TikTok #N をサブ表示に降格、score 順位を idx+1 で表示)
+- score 式: `coalesce(likes,0) * exp(-LN2 * (unixepoch('subsecond') - lastSeenAt/1000) / 86400 / 7)`、SQLite 3.42+ の `unixepoch('subsecond')` + `exp()` を使用。SQL 側で完結させ pagination/index 効率を維持。`score` を SELECT に乗せると同じ式が 2 回コンパイルされバインドが倍化するため ORDER BY 側にだけ scoreExpr を残し、SELECT には含めない
+- レイヤ: web は `@ad-creative-baz/db` を直接依存していないので、API 側で `AD_LIST_*` 一次 alias を切って web からは `@ad-creative-baz/api/routers/ads` 経由で import。db enum と API enum が将来分岐するときの境界を維持
+- verify: `bun run check` (pre-existing 2 件のみ)、`bunx tsc --noEmit --project packages/db|api` green、`apps/web` tsc は pre-existing 10 件 (routeTree.gen 未生成 + cloudflare:workers) のみ・base と一致を確認、SQLite で `exp()`/`unixepoch('subsecond')` が動作することを `sqlite3 :memory:` で確認
+- 未確認: 実 D1 / Miniflare 上での `bun run dev:web` → `/?region=JP&period=7` 等の振る舞い、score 順が体感に合うか (HALF_LIFE_DAYS=7 のチューニング)。alchemy dev 起動 + ingest 後の手動確認は人間タスク
+- reviewer fix: (1) `scoreExpr` を SELECT から外し ORDER BY 専用に、(2) API 一次 alias 化で db→api→web の境界明示、(3) zod schema 重複を adListPeriodSchema 1 か所に統合、(4) likes NULL の扱いと Task #8 マイグレーション TODO をコメントと意思決定ログに記録、(5) `<Link search={(prev) => ...}>` 関数形式で sort 等の将来クエリを保持できる形に
+- 次: 人間が alchemy dev → `bun run ingest` → `/` 表示確認。HALF_LIFE_DAYS の最終チューニングは実データを見て調整
 
 ### 2026-04-18 — video URL 有効期限 (6h TTL) 判明 + スキーマ + ingest 対応
 
